@@ -7,6 +7,7 @@ Fetch weather from yr.no directly from the terminal.
 - Fetch current weather conditions
 - Multi-day forecast support
 - Location-based queries (city names or coordinates)
+- Automatic geocoding for city names
 - Severe weather alerts
 - Rain probability display
 
@@ -20,7 +21,7 @@ chmod +x weather.sh
 ## Usage
 
 ```bash
-# Fetch weather for Oslo
+# Fetch weather for Oslo (auto-geocodes)
 ./weather.sh Oslo
 
 # Fetch weather for coordinates
@@ -34,7 +35,7 @@ chmod +x weather.sh
 
 - Bash 4+
 - curl
-- python3
+- jq
 
 ## API Key
 

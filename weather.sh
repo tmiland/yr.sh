@@ -90,7 +90,7 @@ fetch_weather() {
     local response
     response=$(curl -s -A "${USER_AGENT}" \
         "${API_BASE}/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}" | \
-        python3 -c "import sys, json; data = json.load(sys.stdin); print(json.dumps(data, indent=2))") || true
+        jq '.' ) || true
 
     if [[ -n "$response" ]]; then
         echo "$response"
@@ -109,33 +109,19 @@ geocode_and_fetch() {
     local geo_response
     geo_response=$(curl -s -A "yr.sh/1.0" \
         "https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en" | \
-        python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-results = data.get('results', [])
-if results:
-    r = results[0]
-    lat = r.get('latitude', '')
-    lon = r.get('longitude', '')
-    if lat and lon:
-        print(f'{lat} {lon}')
-    else:
-        print('ERROR:No coordinates found')
-else:
-    print('ERROR:No results found')
-" ) || true
+        jq -r '.results[0].latitude + " " + .results[0].longitude') || true
 
-    if echo "$geo_response" | grep -q '^ERROR:'; then
+    if [[ -n "$geo_response" ]]; then
+        local coords="$geo_response"
+        local lat="${coords%% *}"
+        local lon="${coords##* }"
+
+        echo "Fetching weather for ${lat}, ${lon}..."
+        fetch_weather "$lat" "$lon"
+    else
         echo "Error: Could not find '${query}'. Check the spelling." >&2
         exit 1
     fi
-
-    local coords="$geo_response"
-    local lat="${coords%% *}"
-    local lon="${coords##* }"
-
-    echo "Fetching weather for ${lat}, ${lon}..."
-    fetch_weather "$lat" "$lon"
 }
 
 # Keep geocode_location for backwards compatibility (just geocode, don't fetch)
@@ -147,7 +133,7 @@ geocode_location() {
     local geo_response
     geo_response=$(curl -s -A "yr.sh/1.0" \
         "https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en" | \
-        python3 -c "import sys, json; data = json.load(sys.stdin); print(json.dumps(data, indent=2))") || true
+        jq '.' ) || true
 
     if [[ -n "$geo_response" ]]; then
         echo "$geo_response"

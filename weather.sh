@@ -1,146 +1,194 @@
 #!/usr/bin/env bash
 #
-# yr.sh — Yr.no weather shell script
-# Fetches weather from yr.no and prints a nice summary.
+# yr.sh — weather forecast from yr.no (MET Norway) in your terminal.
 #
 # Usage:
-#   ./weather.sh [location]
+#   ./weather.sh [OPTIONS] <place>
+#   ./weather.sh [OPTIONS] <lat> <lon>
 #
 # Examples:
 #   ./weather.sh Oslo
 #   ./weather.sh 59.9139 10.7522
-#
+#   ./weather.sh --hours 12 Bergen
 
 set -euo pipefail
 
-# ---- constants ----------------------------------------------------------
-API_BASE="https://api.met.no"
-API_KEY="${YR_API_KEY:-}"
-USER_AGENT="yr.sh/1.0"
+readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/compact"
+readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
+readonly USER_AGENT="yr.sh/1.0 (https://github.com/tommy/yr.sh)"
+readonly VERSION="1.0.0"
 
-# ---- helper functions ----------------------------------------------------
+HOURS=6
+
 usage() {
-    echo "Usage: $0 [OPTIONS] [lat.lon]" >&2
-    echo "" >&2
-    echo "Options:" >&2
-    echo "  -h, --help       Show this help" >&2
-    echo "  -v, --version    Print version" >&2
-    echo "" >&2
-    echo "Examples:" >&2
-    echo "  $0 Oslo          Fetch weather for Oslo" >&2
-    echo "  $0 59.9139 10.7522  Fetch weather for coordinates" >&2
+    local prog
+    prog=$(basename "$0")
+    cat <<EOF
+Usage:
+  $prog [OPTIONS] <place>
+  $prog [OPTIONS] <lat> <lon>
+
+Options:
+  -h, --help       Show this help and exit
+  -v, --version    Show version and exit
+  -n, --hours N    Hours of forecast to show (default: 6)
+
+Examples:
+  $prog Oslo
+  $prog 59.9139 10.7522
+  $prog --hours 12 Bergen
+EOF
+}
+
+die() {
+    echo "error: $*" >&2
     exit 1
 }
 
-version() {
-    echo "yr.sh v1.0.0"
+require_deps() {
+    local cmd
+    for cmd in curl jq awk; do
+        command -v "$cmd" >/dev/null 2>&1 || die "missing dependency: $cmd"
+    done
 }
 
-# Check if a string looks like a coordinate (numeric with optional decimal)
-is_coordinate() {
-    local val="$1"
-    [[ "$val" =~ ^-?[0-9]+\.?[0-9]*$ ]]
+urlencode() {
+    jq -rn --arg v "$1" '$v | @uri'
 }
 
-# ---- main ---------------------------------------------------------------
+is_number() {
+    [[ $1 =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+}
+
+validate_coords() {
+    local lat=$1 lon=$2
+    is_number "$lat" || die "latitude is not a number: $lat"
+    is_number "$lon" || die "longitude is not a number: $lon"
+    if ! awk -v lat="$lat" -v lon="$lon" \
+        'BEGIN { exit !(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) }'; then
+        die "coordinates out of range: $lat $lon"
+    fi
+}
+
+# Fetch a URL and fail loudly on network or JSON errors.
+fetch_json() {
+    local url=$1 body
+    if ! body=$(curl -fsS --max-time 20 -A "$USER_AGENT" "$url"); then
+        die "request failed: $url"
+    fi
+    if ! jq -e . >/dev/null 2>&1 <<<"$body"; then
+        die "invalid JSON from: $url"
+    fi
+    printf '%s' "$body"
+}
+
+# Print "lat<TAB>lon<TAB>name" for a place name.
+geocode() {
+    local query=$1 body lat lon name
+    body=$(fetch_json "${GEOCODE_URL}?name=$(urlencode "$query")&count=1&language=en")
+    lat=$(jq -r '.results[0].latitude // empty' <<<"$body")
+    lon=$(jq -r '.results[0].longitude // empty' <<<"$body")
+    [[ -n $lat && -n $lon ]] || die "location not found: $query"
+    name=$(jq -r '.results[0] | if .country then "\(.name), \(.country)" else .name end' <<<"$body")
+    printf '%s\t%s\t%s\n' "$lat" "$lon" "$name"
+}
+
+print_forecast() {
+    local lat=$1 lon=$2 name=$3 body updated
+    body=$(fetch_json "${API_BASE}?lat=${lat}&lon=${lon}")
+
+    jq -e '.properties.timeseries | length > 0' >/dev/null <<<"$body" \
+        || die "no forecast data returned"
+
+    updated=$(jq -r '.properties.meta.updated_at' <<<"$body")
+
+    if [[ -n $name ]]; then
+        echo "Weather for ${name} (${lat}, ${lon})"
+    else
+        echo "Weather for ${lat}, ${lon}"
+    fi
+    echo "Updated: ${updated}"
+    echo
+
+    jq -r '
+        .properties.timeseries[0].data.instant.details
+        | "Now: \(.air_temperature) °C, wind \(.wind_speed) m/s from \(.wind_from_direction)°, humidity \(.relative_humidity)%, pressure \(.air_pressure_at_sea_level) hPa"
+    ' <<<"$body"
+
+    echo
+    echo "Forecast (UTC):"
+    jq -r --argjson hours "$HOURS" '
+        .properties.timeseries[:$hours][]
+        | [ .time[11:16],
+            ( .data.next_1_hours.summary.symbol_code
+              // .data.next_6_hours.summary.symbol_code
+              // "unknown" ),
+            ( .data.instant.details.air_temperature | tostring ),
+            ( .data.next_1_hours.details.precipitation_amount // "–" | tostring )
+          ] | @tsv
+    ' <<<"$body" | while IFS=$'\t' read -r time symbol temp precip; do
+        printf '  %s  %-18s %6s °C  %5s mm\n' "$time" "$symbol" "$temp" "$precip"
+    done
+}
+
 main() {
-    local location=""
-    local lat="" lon=""
-
+    local -a args=()
     while [[ $# -gt 0 ]]; do
-        case "$1" in
+        case $1 in
             -h|--help)
                 usage
-                ;;
-            -v|--version)
-                version
                 exit 0
                 ;;
+            -v|--version)
+                echo "yr.sh ${VERSION}"
+                exit 0
+                ;;
+            -n|--hours)
+                [[ $# -ge 2 ]] || die "option $1 requires an argument"
+                HOURS=$2
+                shift 2
+                ;;
+            --hours=*)
+                HOURS=${1#*=}
+                shift
+                ;;
+            --)
+                shift
+                args+=("$@")
+                break
+                ;;
+            -*)
+                die "unknown option: $1 (try --help)"
+                ;;
             *)
-                if [[ -z "$location" && -z "$lat" ]]; then
-                    location="$1"
-                elif [[ -z "$lat" ]]; then
-                    lat="$1"
-                else
-                    lon="$1"
-                fi
+                args+=("$1")
                 shift
                 ;;
         esac
     done
 
-    if is_coordinate "$location" && is_coordinate "$lat"; then
-        fetch_weather "$location" "$lat"
-    elif [[ -n "$lat" && -n "$lon" ]]; then
-        fetch_weather "$lat" "$lon"
-    elif [[ -n "$location" ]]; then
-        geocode_and_fetch "$location"
-    else
-        usage
-    fi
+    [[ $HOURS =~ ^[0-9]+$ ]] || die "--hours must be a positive integer"
+    HOURS=$((10#$HOURS))
+    (( HOURS > 0 )) || die "--hours must be a positive integer"
+
+    case ${#args[@]} in
+        1)
+            local geo lat lon name
+            geo=$(geocode "${args[0]}")
+            IFS=$'\t' read -r lat lon name <<<"$geo"
+            validate_coords "$lat" "$lon"
+            print_forecast "$lat" "$lon" "$name"
+            ;;
+        2)
+            validate_coords "${args[0]}" "${args[1]}"
+            print_forecast "${args[0]}" "${args[1]}" ""
+            ;;
+        *)
+            usage >&2
+            exit 1
+            ;;
+    esac
 }
 
-# ---- weather fetch ------------------------------------------------------
-fetch_weather() {
-    local lat="$1"
-    local lon="$2"
-
-    echo "Fetching weather for ${lat}, ${lon}..."
-
-    local response
-    response=$(curl -s -A "${USER_AGENT}" \
-        "${API_BASE}/weatherapi/locationforecast/2.0/compact?lat=${lat}&lon=${lon}" | \
-        jq '.' ) || true
-
-    if [[ -n "$response" ]]; then
-        echo "$response"
-    else
-        echo "Error: Failed to fetch weather data." >&2
-        exit 1
-    fi
-}
-
-# ---- geocoding ----------------------------------------------------------
-geocode_and_fetch() {
-    local query="$1"
-
-    echo "Resolving '${query}'..."
-
-    local geo_response
-    geo_response=$(curl -s -A "yr.sh/1.0" \
-        "https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en" | \
-        jq -r '.results[0].latitude + " " + .results[0].longitude') || true
-
-    if [[ -n "$geo_response" ]]; then
-        local coords="$geo_response"
-        local lat="${coords%% *}"
-        local lon="${coords##* }"
-
-        echo "Fetching weather for ${lat}, ${lon}..."
-        fetch_weather "$lat" "$lon"
-    else
-        echo "Error: Could not find '${query}'. Check the spelling." >&2
-        exit 1
-    fi
-}
-
-# Keep geocode_location for backwards compatibility (just geocode, don't fetch)
-geocode_location() {
-    local query="$1"
-
-    echo "Resolving '${query}'..."
-
-    local geo_response
-    geo_response=$(curl -s -A "yr.sh/1.0" \
-        "https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en" | \
-        jq '.' ) || true
-
-    if [[ -n "$geo_response" ]]; then
-        echo "$geo_response"
-    else
-        echo "Error: Could not find '${query}'. Check the spelling." >&2
-        exit 1
-    fi
-}
-
+require_deps
 main "$@"

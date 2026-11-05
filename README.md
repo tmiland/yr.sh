@@ -1,35 +1,14 @@
-# yr.sh — Yr.no Weather Shell Script
+# yr.sh — Yr.no weather in your terminal
 
-Fetch weather from yr.no directly from the terminal.
+Fetch the forecast from yr.no (MET Norway) and print a readable summary.
 
 ## Features
 
-- Fetch current weather conditions
-- Multi-day forecast support
-- Location-based queries (city names or coordinates)
-- Automatic geocoding for city names
-- Severe weather alerts
-- Rain probability display
-
-## Installation
-
-```bash
-cd ~/.github/yr.sh
-chmod +x weather.sh
-```
-
-## Usage
-
-```bash
-# Fetch weather for Oslo (auto-geocodes)
-./weather.sh Oslo
-
-# Fetch weather for coordinates
-./weather.sh 59.9139 10.7522
-
-# Show help
-./weather.sh --help
-```
+- Current conditions: temperature, wind, humidity, pressure
+- Hourly forecast with symbol and precipitation
+- Place lookup by name (geocoded automatically) or explicit coordinates
+- Configurable forecast length
+- Metric units (°C, m/s, mm, hPa)
 
 ## Requirements
 
@@ -37,9 +16,40 @@ chmod +x weather.sh
 - curl
 - jq
 
-## API Key
+## Usage
 
-Optional: Set `YR_API_KEY` environment variable for extended features.
+```bash
+# Forecast for a place (geocoded automatically)
+./weather.sh Oslo
+
+# Forecast for coordinates
+./weather.sh 59.9139 10.7522
+
+# Show the next 12 hours
+./weather.sh --hours 12 Bergen
+
+# Help and version
+./weather.sh --help
+./weather.sh --version
+```
+
+## Example output
+
+```text
+Weather for Oslo, Norway (59.91273, 10.74609)
+Updated: 2026-11-05T19:30:32Z
+
+Now: 3.6 °C, wind 1.1 m/s from 81.0°, humidity 84.3%, pressure 1033.5 hPa
+
+Forecast (UTC):
+  19:00  clearsky_night        3.6 °C    0.0 mm
+  20:00  clearsky_night        3.2 °C    0.0 mm
+```
+
+## Data sources
+
+- Forecast: [MET Norway Locationforecast 2.0](https://api.met.no/weatherapi/locationforecast/2.0/documentation) — the API behind yr.no
+- Geocoding: [Open-Meteo Geocoding API](https://open-meteo.com/en/docs/geocoding-api)
 
 ## License
 

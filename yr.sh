@@ -15,13 +15,20 @@ set -euo pipefail
 export LC_NUMERIC=C
 
 readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/complete"
+readonly ALERTS_URL="https://api.met.no/weatherapi/metalerts/2.0/current.json"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
-readonly USER_AGENT="yr.sh/1.1 (https://github.com/tommy/yr.sh)"
-readonly VERSION="1.1.0"
+readonly USER_AGENT="yr.sh/1.3 (https://github.com/tommy/yr.sh)"
+readonly VERSION="1.3.0"
 readonly RULE_LEN=48
 
 HOURS=6
 PLAIN=0
+NO_CACHE=0
+CACHE_KEY=""
+WARN=0
+NOTIFY=0
+AUTO_RUN=0
+INTERVAL=600
 
 BOLD=""
 DIM=""
@@ -47,6 +54,13 @@ Options:
   -v, --version    Show version and exit
   -n, --hours N    Hours of forecast to show (default: $HOURS)
       --plain      No icons or color (script-friendly)
+      --no-cache   Bypass the local cache
+  -w, --warnings   Show active weather warnings and exit
+      --notify     Desktop-notify active warnings and exit
+  -ar, --auto-run  Poll for new warnings and desktop-notify
+      --interval N Poll interval in seconds (default: $INTERVAL)
+      --install    Install as ~/.local/bin/yr
+      --uninstall  Remove ~/.local/bin/yr
 
 Examples:
   $prog Oslo
@@ -65,6 +79,11 @@ require_deps() {
     for cmd in curl jq awk date; do
         command -v "$cmd" >/dev/null 2>&1 || die "missing dependency: $cmd"
     done
+}
+
+require_notify() {
+    command -v notify-send >/dev/null 2>&1 \
+        || die "missing dependency: notify-send (install libnotify-bin)"
 }
 
 init_color() {
@@ -99,16 +118,207 @@ validate_coords() {
     fi
 }
 
-# Fetch a URL and fail loudly on network or JSON errors.
+# Fetch a URL and fail loudly on network, HTTP or JSON errors.
 fetch_json() {
-    local url=$1 body
-    if ! body=$(curl -fsS --max-time 20 -A "$USER_AGENT" "$url"); then
+    local url=$1 body tmp status
+    tmp=$(mktemp) || die "cannot create temp file"
+    if ! status=$(curl -sS --compressed --max-time 20 -A "$USER_AGENT" \
+        -o "$tmp" -w '%{http_code}' "$url"); then
+        rm -f "$tmp"
         die "request failed: $url"
     fi
+    case $status in
+        200) ;;
+        203) echo "warning: server reports this product as deprecated (HTTP 203)" >&2 ;;
+        403) rm -f "$tmp"; die "HTTP 403 forbidden: $url" ;;
+        429) rm -f "$tmp"; die "HTTP 429 rate limited: $url" ;;
+        *) rm -f "$tmp"; die "HTTP $status from: $url" ;;
+    esac
+    body=$(cat "$tmp")
+    rm -f "$tmp"
     if ! jq -e . >/dev/null 2>&1 <<<"$body"; then
         die "invalid JSON from: $url"
     fi
     printf '%s' "$body"
+}
+
+# Fetch a URL, honoring the server's Expires header via a local cache.
+fetch_cached() {
+    local url=$1 key=$2 body tmp hdr status exp exp_epoch now
+    local cache file exp_file
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/yr.sh"
+    file="$cache/${key}.json"
+    exp_file="$file.expires"
+
+    if (( !NO_CACHE )) && [[ -s $file && -r $exp_file ]]; then
+        now=$(date +%s)
+        if exp_epoch=$(cat "$exp_file" 2>/dev/null) \
+            && [[ $exp_epoch =~ ^[0-9]+$ ]] \
+            && (( exp_epoch > now )); then
+            cat "$file"
+            return 0
+        fi
+    fi
+
+    tmp=$(mktemp) || die "cannot create temp file"
+    hdr=$(mktemp) || {
+        rm -f "$tmp"
+        die "cannot create temp file"
+    }
+    if ! status=$(curl -sS --compressed --max-time 20 -A "$USER_AGENT" \
+        -D "$hdr" -o "$tmp" -w '%{http_code}' "$url"); then
+        rm -f "$tmp" "$hdr"
+        die "request failed: $url"
+    fi
+    case $status in
+        200) ;;
+        203) echo "warning: server reports this product as deprecated (HTTP 203)" >&2 ;;
+        403) rm -f "$tmp" "$hdr"; die "HTTP 403 forbidden: $url" ;;
+        429) rm -f "$tmp" "$hdr"; die "HTTP 429 rate limited: $url" ;;
+        *) rm -f "$tmp" "$hdr"; die "HTTP $status from: $url" ;;
+    esac
+    body=$(cat "$tmp")
+    if ! jq -e . >/dev/null 2>&1 <<<"$body"; then
+        rm -f "$tmp" "$hdr"
+        die "invalid JSON from: $url"
+    fi
+
+    if mkdir -p "$cache" 2>/dev/null; then
+        exp=$(awk 'BEGIN { IGNORECASE = 1 }
+            /^expires:/ { sub(/^expires:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' "$hdr")
+        if [[ -n $exp ]] && exp_epoch=$(date -d "$exp" +%s 2>/dev/null); then
+            :
+        else
+            exp_epoch=$(( $(date +%s) + 1800 ))
+        fi
+        printf '%s' "$body" > "$file.tmp.$$" && mv -f "$file.tmp.$$" "$file"
+        printf '%s\n' "$exp_epoch" > "$exp_file.tmp.$$" && mv -f "$exp_file.tmp.$$" "$exp_file"
+    fi
+    rm -f "$tmp" "$hdr"
+    printf '%s' "$body"
+}
+
+# ---- warnings ------------------------------------------------------------
+fetch_alerts() {
+    local lat=$1 lon=$2 lat_req lon_req
+    printf -v lat_req '%.4f' "$lat"
+    printf -v lon_req '%.4f' "$lon"
+    CACHE_KEY="${lat_req}_${lon_req}"
+    fetch_cached "${ALERTS_URL}?lat=${lat_req}&lon=${lon_req}&lang=en" "alerts_${CACHE_KEY}"
+}
+
+notify_alert() {
+    local line=$1 name=$2 event area title desc severity urgency summary body
+    event=$(jq -r '.properties.event // "weather warning"' <<<"$line")
+    area=$(jq -r '.properties.area // ""' <<<"$line")
+    title=$(jq -r '.properties.title // ""' <<<"$line")
+    desc=$(jq -r '.properties.description // ""' <<<"$line")
+    severity=$(jq -r '.properties.severity // ""' <<<"$line")
+
+    urgency="normal"
+    case $severity in
+        Severe|Extreme) urgency="critical" ;;
+    esac
+
+    summary="Weather warning: ${event^}"
+    [[ -n $area ]] && summary+=" — ${area}"
+    body="$title"
+    [[ -n $desc ]] && body+=$'\n\n'"$desc"
+
+    if ! notify-send --app-name="yr.sh" --icon=dialog-warning \
+        --urgency="$urgency" "$summary" "$body"; then
+        echo "warning: desktop notification failed" >&2
+    fi
+}
+
+show_warnings() {
+    local lat=$1 lon=$2 name=$3 mode=$4 body count line label lat_disp lon_disp
+    label="$name"
+    if [[ -z $label ]]; then
+        printf -v lat_disp '%.2f' "$lat"
+        printf -v lon_disp '%.2f' "$lon"
+        label="$lat_disp, $lon_disp"
+    fi
+    body=$(fetch_alerts "$lat" "$lon")
+    count=$(jq '.features | length' <<<"$body")
+
+    if (( count == 0 )); then
+        echo "No active weather warnings for ${label}."
+        return 0
+    fi
+
+    echo "Weather warnings for ${label}:"
+    local prefix="⚠"
+    (( PLAIN )) && prefix="-"
+    jq -r --arg prefix "$prefix" '
+        .features[]
+        | "  \($prefix)  \(.properties.title // .properties.event // "Weather warning")",
+          (if (.properties.description // "") != ""
+           then "     \(.properties.description | gsub("\n"; "\n     "))"
+           else empty end),
+          ""
+    ' <<<"$body"
+
+    if [[ $mode == notify ]]; then
+        while IFS= read -r line; do
+            [[ -n $line ]] || continue
+            notify_alert "$line" "$name"
+        done < <(jq -c '.features[]?' <<<"$body")
+    fi
+}
+
+auto_run() {
+    local lat=$1 lon=$2 name=$3
+    local lat_req lon_req state_dir state_file body count line id new_count label
+    label="$name"
+    if [[ -z $label ]]; then
+        local lat_disp lon_disp
+        printf -v lat_disp '%.2f' "$lat"
+        printf -v lon_disp '%.2f' "$lon"
+        label="$lat_disp, $lon_disp"
+    fi
+    printf -v lat_req '%.4f' "$lat"
+    printf -v lon_req '%.4f' "$lon"
+    CACHE_KEY="${lat_req}_${lon_req}"
+    state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/yr.sh"
+    mkdir -p "$state_dir" || die "cannot create $state_dir"
+    state_file="$state_dir/warnings_${CACHE_KEY}.seen"
+
+    while true; do
+        if ! body=$(fetch_alerts "$lat" "$lon"); then
+            echo "warning: could not fetch weather warnings; retrying in ${INTERVAL}s" >&2
+            sleep "$INTERVAL"
+            continue
+        fi
+        count=$(jq '.features | length' <<<"$body")
+        new_count=0
+
+        if (( count > 0 )); then
+            while IFS= read -r line; do
+                [[ -n $line ]] || continue
+                id=$(jq -r '.properties.id // empty' <<<"$line")
+                [[ -n $id ]] || continue
+                if ! grep -qxF "$id" "$state_file" 2>/dev/null; then
+                    echo "New warning: $(jq -r '.properties.title // .properties.event // "weather warning"' <<<"$line")"
+                    notify_alert "$line" "$name"
+                    new_count=$((new_count + 1))
+                fi
+            done < <(jq -c '.features[]?' <<<"$body")
+            jq -r '.features[].properties.id // empty' <<<"$body" > "$state_file.tmp.$$"
+            mv -f "$state_file.tmp.$$" "$state_file"
+        else
+            : > "$state_file"
+        fi
+
+        if (( new_count > 0 )); then
+            echo "Notified ${new_count} new warning(s) for ${label}. Waiting ${INTERVAL}s..."
+        elif (( count > 0 )); then
+            echo "No new warnings for ${label}. Waiting ${INTERVAL}s..."
+        else
+            echo "No active warnings for ${label}. Waiting ${INTERVAL}s..."
+        fi
+        sleep "$INTERVAL"
+    done
 }
 
 # Print "lat<TAB>lon<TAB>name" for a place name.
@@ -237,8 +447,11 @@ day_label() {
 
 print_forecast() {
     local lat=$1 lon=$2 name=$3 body updated_local lat_disp lon_disp
-    local sep rule rule_char header_meta
-    body=$(fetch_json "${API_BASE}?lat=${lat}&lon=${lon}")
+    local lat_req lon_req sep rule rule_char header_meta
+    printf -v lat_req '%.4f' "$lat"
+    printf -v lon_req '%.4f' "$lon"
+    CACHE_KEY="${lat_req}_${lon_req}"
+    body=$(fetch_cached "${API_BASE}?lat=${lat_req}&lon=${lon_req}" "forecast_${CACHE_KEY}")
 
     jq -e '.properties.timeseries | length > 0' >/dev/null <<<"$body" \
         || die "no forecast data returned"
@@ -367,6 +580,45 @@ print_forecast() {
     ' <<<"$body")
 }
 
+# ---- install -------------------------------------------------------------
+install_self() {
+    local src bin_dir dest
+    src=$(readlink -f "$0") || die "cannot resolve script path"
+    bin_dir="${HOME}/.local/bin"
+    dest="${bin_dir}/yr"
+
+    if [[ -e $dest && ! -L $dest ]]; then
+        die "$dest exists and is not a symlink; refusing to overwrite"
+    fi
+    if [[ ! -d $bin_dir ]]; then
+        mkdir -p "$bin_dir" || die "cannot create $bin_dir"
+    fi
+    ln -sfn "$src" "$dest" || die "failed to create $dest"
+    echo "installed: $dest -> $src"
+    case ":$PATH:" in
+        *":$bin_dir:"*) ;;
+        *) echo "note: $bin_dir is not in PATH" >&2 ;;
+    esac
+}
+
+uninstall_self() {
+    local src dest
+    src=$(readlink -f "$0") || die "cannot resolve script path"
+    dest="${HOME}/.local/bin/yr"
+
+    if [[ -L $dest ]]; then
+        if [[ $(readlink -f "$dest") != "$src" ]]; then
+            die "$dest points elsewhere; refusing to remove"
+        fi
+        rm -f "$dest" || die "failed to remove $dest"
+        echo "removed: $dest"
+    elif [[ -e $dest ]]; then
+        die "$dest is not a symlink; refusing to remove"
+    else
+        echo "not installed: $dest"
+    fi
+}
+
 # ---- main ----------------------------------------------------------------
 main() {
     local -a args=()
@@ -393,6 +645,35 @@ main() {
                 PLAIN=1
                 shift
                 ;;
+            --no-cache)
+                NO_CACHE=1
+                shift
+                ;;
+            -w|--warnings)
+                WARN=1
+                shift
+                ;;
+            --notify)
+                NOTIFY=1
+                shift
+                ;;
+            -ar|--auto-run)
+                AUTO_RUN=1
+                shift
+                ;;
+            --interval)
+                [[ $# -ge 2 ]] || die "option $1 requires an argument"
+                INTERVAL=$2
+                shift 2
+                ;;
+            --install)
+                install_self
+                exit 0
+                ;;
+            --uninstall)
+                uninstall_self
+                exit 0
+                ;;
             --)
                 shift
                 args+=("$@")
@@ -412,26 +693,42 @@ main() {
     HOURS=$((10#$HOURS))
     (( HOURS > 0 )) || die "--hours must be a positive integer"
 
+    [[ $INTERVAL =~ ^[0-9]+$ ]] || die "--interval must be a positive integer"
+    INTERVAL=$((10#$INTERVAL))
+    (( INTERVAL > 0 )) || die "--interval must be a positive integer"
+
+    require_deps
     init_color
 
+    local lat="" lon="" name=""
     case ${#args[@]} in
         1)
-            local geo lat lon name
+            local geo
             geo=$(geocode "${args[0]}")
             IFS=$'\t' read -r lat lon name <<<"$geo"
-            validate_coords "$lat" "$lon"
-            print_forecast "$lat" "$lon" "$name"
             ;;
         2)
-            validate_coords "${args[0]}" "${args[1]}"
-            print_forecast "${args[0]}" "${args[1]}" ""
+            lat=${args[0]}
+            lon=${args[1]}
             ;;
         *)
             usage >&2
             exit 1
             ;;
     esac
+    validate_coords "$lat" "$lon"
+
+    if (( AUTO_RUN )); then
+        require_notify
+        auto_run "$lat" "$lon" "$name"
+    elif (( NOTIFY )); then
+        require_notify
+        show_warnings "$lat" "$lon" "$name" notify
+    elif (( WARN )); then
+        show_warnings "$lat" "$lon" "$name" print
+    else
+        print_forecast "$lat" "$lon" "$name"
+    fi
 }
 
-require_deps
 main "$@"

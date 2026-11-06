@@ -17,9 +17,14 @@ export LC_NUMERIC=C
 readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/complete"
 readonly ALERTS_URL="https://api.met.no/weatherapi/metalerts/2.0/current.json"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
-readonly USER_AGENT="yr.sh/1.3 (https://github.com/tmiland/yr.sh)"
-readonly VERSION="1.3.0"
+readonly USER_AGENT="yr.sh/1.4 (https://github.com/tmiland/yr.sh)"
+readonly VERSION="1.4.0"
 readonly RULE_LEN=48
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/yr.sh"
+readonly CONFIG_FILE="${CONFIG_DIR}/config"
+SCRIPT_DIR=$(cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
+readonly SCRIPT_DIR
+readonly ICON_DIR="${SCRIPT_DIR}/assets/warning-icons"
 
 HOURS=6
 PLAIN=0
@@ -29,6 +34,12 @@ WARN=0
 NOTIFY=0
 AUTO_RUN=0
 INTERVAL=600
+INTERVAL_SET=0
+DO_CONFIG=0
+DO_INSTALL=0
+DO_UNINSTALL=0
+CONFIG_LOCATION=""
+CONFIG_INTERVAL=""
 
 BOLD=""
 DIM=""
@@ -59,8 +70,11 @@ Options:
       --notify     Desktop-notify active warnings and exit
   -ar, --auto-run  Poll for new warnings and desktop-notify
       --interval N Poll interval in seconds (default: $INTERVAL)
-      --install    Install as ~/.local/bin/yr
-      --uninstall  Remove ~/.local/bin/yr
+  -c, --config     Configure location and poll interval
+  -i, --install    Install command and systemd user service
+  -u, --uninstall  Remove command, service and config
+
+With no place given, the configured location is used (see --config).
 
 Examples:
   $prog Oslo
@@ -84,6 +98,67 @@ require_deps() {
 require_notify() {
     command -v notify-send >/dev/null 2>&1 \
         || die "missing dependency: notify-send (install libnotify-bin)"
+}
+
+# ---- config --------------------------------------------------------------
+load_config() {
+    CONFIG_LOCATION=""
+    CONFIG_INTERVAL=""
+    [[ -f $CONFIG_FILE ]] || return 0
+    local line key value
+    while IFS= read -r line || [[ -n $line ]]; do
+        if [[ -z $line || $line == '#'* ]]; then
+            continue
+        fi
+        key=${line%%=*}
+        value=${line#*=}
+        case $key in
+            location) CONFIG_LOCATION=$value ;;
+            interval) CONFIG_INTERVAL=$value ;;
+        esac
+    done < "$CONFIG_FILE"
+}
+
+write_config() {
+    local location=$1 interval=$2
+    mkdir -p "$CONFIG_DIR" || die "cannot create $CONFIG_DIR"
+    {
+        printf '# yr.sh configuration\n'
+        printf 'location=%s\n' "$location"
+        printf 'interval=%s\n' "$interval"
+    } > "$CONFIG_FILE" || die "cannot write $CONFIG_FILE"
+    echo "saved: $CONFIG_FILE"
+}
+
+config_dialog() {
+    local location interval input_location input_interval output
+    load_config
+    location=$CONFIG_LOCATION
+    interval=${CONFIG_INTERVAL:-$INTERVAL}
+
+    if command -v zenity >/dev/null 2>&1 && [[ -n ${DISPLAY:-} ]]; then
+        if ! output=$(zenity --forms --title="yr.sh Configuration" \
+            --text="Weather location and warning poll interval" \
+            --add-entry="Location (place or lat,lon) : (${location})" \
+            --add-entry="Poll interval in seconds : (${interval})"); then
+            echo "configuration cancelled" >&2
+            return 0
+        fi
+        IFS='|' read -r input_location input_interval <<<"$output"
+        if [[ -n $input_location ]]; then location=$input_location; fi
+        if [[ -n $input_interval ]]; then interval=$input_interval; fi
+    else
+        read -rp "Location (place or lat,lon) [${location}]: " input_location
+        if [[ -n $input_location ]]; then location=$input_location; fi
+        read -rp "Poll interval in seconds [${interval}]: " input_interval
+        if [[ -n $input_interval ]]; then interval=$input_interval; fi
+    fi
+
+    [[ -n $location ]] || die "location is required"
+    [[ $interval =~ ^[0-9]+$ ]] || die "interval must be a positive integer"
+    interval=$((10#$interval))
+    (( interval > 0 )) || die "interval must be a positive integer"
+    write_config "$location" "$interval"
 }
 
 init_color() {
@@ -207,8 +282,63 @@ fetch_alerts() {
     fetch_cached "${ALERTS_URL}?lat=${lat_req}&lon=${lon_req}&lang=en" "alerts_${CACHE_KEY}"
 }
 
+# Map an alert to a Yr warning icon (type + risk color).
+warning_icon() {
+    local line=$1 type color base file
+    type=$(jq -r '.properties.awareness_type // ""' <<<"$line")
+    type=${type#*; }
+    type=${type,,}
+    color=$(jq -r '.properties.riskMatrixColor // "yellow"' <<<"$line")
+    color=${color,,}
+    case $type in
+        avalanche*) base=avalanches ;;
+        driving*conditions*) base=drivingconditions ;;
+        flood) base=flood ;;
+        forest*fire*) base=forestfire ;;
+        gale|wind*) base=wind ;;
+        ice|snow-ice) base=ice ;;
+        landslide) base=landslide ;;
+        lightning|thunder*) base=lightning ;;
+        polar*low*) base=polarlow ;;
+        rainflood|rain*flood*) base=rainflood ;;
+        rain) base=rain ;;
+        sleet|snow) base=snow ;;
+        storm*surge*) base=stormsurge ;;
+        *) base=generic ;;
+    esac
+    case $color in
+        yellow|orange|red) ;;
+        *) color=yellow ;;
+    esac
+    file="${ICON_DIR}/icon-warning-${base}-${color}.svg"
+    if [[ -f $file ]]; then
+        printf '%s' "$file"
+    else
+        printf '%s' "${ICON_DIR}/icon-warning-generic-yellow.svg"
+    fi
+}
+
+# Convert to PNG once (if rsvg-convert exists) so notification daemons can show it.
+warning_icon_png() {
+    local svg=$1 name png
+    name=$(basename "${svg%.svg}")
+    png="${XDG_CACHE_HOME:-$HOME/.cache}/yr.sh/icons/${name}.png"
+    if [[ -f $png ]]; then
+        printf '%s' "$png"
+        return 0
+    fi
+    if command -v rsvg-convert >/dev/null 2>&1; then
+        if mkdir -p "$(dirname "$png")" 2>/dev/null \
+            && rsvg-convert -w 96 -h 96 "$svg" -o "$png" 2>/dev/null; then
+            printf '%s' "$png"
+            return 0
+        fi
+    fi
+    printf '%s' "$svg"
+}
+
 notify_alert() {
-    local line=$1 name=$2 event area title desc severity urgency summary body
+    local line=$1 name=$2 event area title desc severity urgency summary body icon
     event=$(jq -r '.properties.event // "weather warning"' <<<"$line")
     area=$(jq -r '.properties.area // ""' <<<"$line")
     title=$(jq -r '.properties.title // ""' <<<"$line")
@@ -225,8 +355,20 @@ notify_alert() {
     body="$title"
     [[ -n $desc ]] && body+=$'\n\n'"$desc"
 
-    if ! notify-send --app-name="yr.sh" --icon=dialog-warning \
-        --urgency="$urgency" "$summary" "$body"; then
+    icon=$(warning_icon "$line")
+    if [[ -f $icon ]]; then
+        icon=$(warning_icon_png "$icon")
+    else
+        icon="dialog-warning"
+    fi
+
+    if ! notify-send \
+        --hint=string:sound-name:dialog-warning \
+        --app-name="yr.sh" \
+        --app-icon=dialog-warning-symbolic \
+        --icon="$icon" \
+        --urgency="$urgency" \
+        "$summary" "$body"; then
         echo "warning: desktop notification failed" >&2
     fi
 }
@@ -582,19 +724,52 @@ print_forecast() {
 
 # ---- install -------------------------------------------------------------
 install_self() {
-    local src bin_dir dest
+    local src bin_dir dest unit_dir unit
     src=$(readlink -f "$0") || die "cannot resolve script path"
     bin_dir="${HOME}/.local/bin"
     dest="${bin_dir}/yr"
+    unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    unit="${unit_dir}/yr.service"
+
+    load_config
+    [[ -n $CONFIG_LOCATION ]] || die "no location configured; run $(basename "$0") --config"
 
     if [[ -e $dest && ! -L $dest ]]; then
         die "$dest exists and is not a symlink; refusing to overwrite"
     fi
-    if [[ ! -d $bin_dir ]]; then
-        mkdir -p "$bin_dir" || die "cannot create $bin_dir"
-    fi
+    mkdir -p "$bin_dir" || die "cannot create $bin_dir"
     ln -sfn "$src" "$dest" || die "failed to create $dest"
     echo "installed: $dest -> $src"
+
+    mkdir -p "$unit_dir" || die "cannot create $unit_dir"
+    cat > "$unit" <<EOF || die "cannot write $unit"
+[Unit]
+Description=yr.sh weather warnings
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment="DISPLAY=:0"
+ExecStart=${dest} --auto-run
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+
+    if ! command -v notify-send >/dev/null 2>&1; then
+        echo "warning: notify-send not found; install libnotify-bin" >&2
+    fi
+
+    systemctl --user daemon-reload || die "systemctl --user daemon-reload failed"
+    systemctl --user enable yr.service || die "failed to enable yr.service"
+    systemctl --user restart yr.service || die "failed to start yr.service"
+    echo "enabled and started: yr.service (location: ${CONFIG_LOCATION})"
+    if ! systemctl --user status yr.service --no-pager; then
+        echo "note: could not read service status" >&2
+    fi
+
     case ":$PATH:" in
         *":$bin_dir:"*) ;;
         *) echo "note: $bin_dir is not in PATH" >&2 ;;
@@ -602,9 +777,22 @@ install_self() {
 }
 
 uninstall_self() {
-    local src dest
+    local src dest unit_dir unit
     src=$(readlink -f "$0") || die "cannot resolve script path"
     dest="${HOME}/.local/bin/yr"
+    unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    unit="${unit_dir}/yr.service"
+
+    if [[ -f $unit ]]; then
+        if ! systemctl --user disable --now yr.service >/dev/null 2>&1; then
+            echo "note: yr.service was not running" >&2
+        fi
+        rm -f "$unit" || die "failed to remove $unit"
+        if ! systemctl --user daemon-reload >/dev/null 2>&1; then
+            echo "note: systemctl --user daemon-reload failed" >&2
+        fi
+        echo "removed: yr.service"
+    fi
 
     if [[ -L $dest ]]; then
         if [[ $(readlink -f "$dest") != "$src" ]]; then
@@ -616,6 +804,14 @@ uninstall_self() {
         die "$dest is not a symlink; refusing to remove"
     else
         echo "not installed: $dest"
+    fi
+
+    if [[ -f $CONFIG_FILE ]]; then
+        rm -f "$CONFIG_FILE" || die "failed to remove $CONFIG_FILE"
+        if ! rmdir "$CONFIG_DIR" 2>/dev/null; then
+            echo "note: kept $CONFIG_DIR (not empty)" >&2
+        fi
+        echo "removed: $CONFIG_FILE"
     fi
 }
 
@@ -664,15 +860,20 @@ main() {
             --interval)
                 [[ $# -ge 2 ]] || die "option $1 requires an argument"
                 INTERVAL=$2
+                INTERVAL_SET=1
                 shift 2
                 ;;
-            --install)
-                install_self
-                exit 0
+            -c|--config)
+                DO_CONFIG=1
+                shift
                 ;;
-            --uninstall)
-                uninstall_self
-                exit 0
+            -i|--install)
+                DO_INSTALL=1
+                shift
+                ;;
+            -u|--uninstall)
+                DO_UNINSTALL=1
+                shift
                 ;;
             --)
                 shift
@@ -689,6 +890,11 @@ main() {
         esac
     done
 
+    load_config
+    if (( !INTERVAL_SET )) && [[ -n $CONFIG_INTERVAL ]]; then
+        INTERVAL=$CONFIG_INTERVAL
+    fi
+
     [[ $HOURS =~ ^[0-9]+$ ]] || die "--hours must be a positive integer"
     HOURS=$((10#$HOURS))
     (( HOURS > 0 )) || die "--hours must be a positive integer"
@@ -697,25 +903,76 @@ main() {
     INTERVAL=$((10#$INTERVAL))
     (( INTERVAL > 0 )) || die "--interval must be a positive integer"
 
+    if (( DO_UNINSTALL )); then
+        uninstall_self
+        exit 0
+    fi
+    if (( DO_CONFIG )); then
+        config_dialog
+        exit 0
+    fi
+    if (( DO_INSTALL )); then
+        load_config
+        if (( ${#args[@]} == 1 )); then
+            CONFIG_LOCATION=${args[0]}
+        elif (( ${#args[@]} == 2 )); then
+            CONFIG_LOCATION="${args[0]},${args[1]}"
+        fi
+        if [[ -n $CONFIG_LOCATION ]]; then
+            local cfg_interval=$INTERVAL
+            if (( !INTERVAL_SET )) && [[ -n $CONFIG_INTERVAL ]]; then
+                cfg_interval=$CONFIG_INTERVAL
+            fi
+            write_config "$CONFIG_LOCATION" "$cfg_interval"
+        else
+            echo "No location configured; starting configuration."
+            config_dialog
+            load_config
+        fi
+        [[ -n $CONFIG_LOCATION ]] || die "location is required"
+        install_self
+        exit 0
+    fi
+
     require_deps
     init_color
 
-    local lat="" lon="" name=""
-    case ${#args[@]} in
-        1)
-            local geo
-            geo=$(geocode "${args[0]}")
-            IFS=$'\t' read -r lat lon name <<<"$geo"
-            ;;
-        2)
-            lat=${args[0]}
-            lon=${args[1]}
-            ;;
-        *)
+    local lat="" lon="" name="" place=""
+    if (( ${#args[@]} == 0 )); then
+        if [[ -z $CONFIG_LOCATION ]]; then
             usage >&2
             exit 1
-            ;;
-    esac
+        fi
+        if [[ $CONFIG_LOCATION == *,* ]]; then
+            lat=${CONFIG_LOCATION%%,*}
+            lon=${CONFIG_LOCATION#*,}
+            lat=${lat//[[:space:]]/}
+            lon=${lon//[[:space:]]/}
+        else
+            place=$CONFIG_LOCATION
+        fi
+    elif (( ${#args[@]} == 1 )); then
+        if [[ ${args[0]} == *,* ]]; then
+            lat=${args[0]%%,*}
+            lon=${args[0]#*,}
+            lat=${lat//[[:space:]]/}
+            lon=${lon//[[:space:]]/}
+        else
+            place=${args[0]}
+        fi
+    elif (( ${#args[@]} == 2 )); then
+        lat=${args[0]}
+        lon=${args[1]}
+    else
+        usage >&2
+        exit 1
+    fi
+
+    if [[ -n $place ]]; then
+        local geo
+        geo=$(geocode "$place")
+        IFS=$'\t' read -r lat lon name <<<"$geo"
+    fi
     validate_coords "$lat" "$lon"
 
     if (( AUTO_RUN )); then

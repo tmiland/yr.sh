@@ -10,3 +10,6 @@ Thumbs.db
 # Environment
 .env
 .env.*
+
+# Internal notes (never publish)
+docs/superpowers/

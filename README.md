@@ -1,38 +1,83 @@
-# yr.sh — Yr.no weather in your terminal
+<div align="center">
 
-Fetch the forecast from yr.no (MET Norway) and print a clean dashboard, with desktop notifications for weather warnings.
+# yr.sh
+
+**Yr.no weather in your terminal — a clean forecast dashboard and desktop warnings for Norway.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![Bash 4+](https://img.shields.io/badge/bash-4%2B-4EAA25?logo=gnubash&logoColor=white)](#requirements)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-1f6feb?logo=linux&logoColor=white)](#requirements)
+[![Data: MET Norway](https://img.shields.io/badge/data-MET%20Norway-0b7285)](https://api.met.no/)
+
+<img src="docs/demo.png" alt="yr.sh showing the forecast and an active weather warning for Oslo" width="690">
+
+</div>
+
+## Why yr.sh?
+
+`yr.sh` puts the forecast from yr.no (MET Norway) in your terminal: current conditions, an hourly table with weather icons, and active weather warnings with desktop notifications — all in one Bash script. No Python, no browser, no background daemon needed for the forecast.
 
 ## Features
 
-- Current conditions: temperature (with feels-like), wind and gusts, humidity, pressure, UV
-- Hourly forecast with weather icons, temperature, precipitation and rain probability
-- Day separators (Today / Tomorrow / weekday)
-- Active weather warnings from MET MetAlerts (Norway)
-- Desktop notifications for new warnings (`notify-send`) with Yr warning icons, one-shot or as a systemd user service
-- Automatic place lookup or explicit coordinates
-- Local time, metric units
-- Color when the output is a terminal (respects `NO_COLOR`); `--plain` for scripts
-- Configurable forecast length (`--hours`) and cache bypass (`--no-cache`)
-
-## Requirements
-
-- Bash 4+
-- curl, jq, awk
-- GNU date (Linux)
-- libnotify (`notify-send`) and zenity for notifications and the config dialog
+- **Now panel** — temperature with feels-like, wind and gusts, humidity, pressure, UV
+- **Hourly forecast** — weather icons, temperature, precipitation and rain probability
+- **Day separators** — Today / Tomorrow / weekday, in your local time
+- **Warnings** — MET MetAlerts for Norway, with the matching Yr warning icon
+- **Desktop notifications** — `notify-send`, one-shot or as a systemd user service
+- **Config-driven** — location and poll interval in `~/.config/yr.sh/config`
+- **Terminal-friendly** — color on a TTY, respects `NO_COLOR`, `--plain` for scripts
+- **Well-behaved** — gzip, caching per `Expires`, 4-decimal coordinates, clear HTTP errors
 
 ## Install
 
 ```bash
-./yr.sh --install Rjukan   # command + systemd user service
-yr Oslo
+git clone https://github.com/tmiland/yr.sh.git
+cd yr.sh
+./yr.sh --install Oslo     # command + systemd user service
 ```
 
-`--install` symlinks the script to `~/.local/bin/yr`, saves the location to the config, installs `yr.service` and enables/starts it. Without a location argument it uses the existing config or opens the config dialog.
+`--install` does three things:
+
+1. symlinks `yr` into `~/.local/bin`
+2. saves `location=Oslo` and `interval=600` to `~/.config/yr.sh/config`
+3. installs and starts `yr.service` (systemd user) for warning notifications
+
+Then:
 
 ```bash
-./yr.sh --uninstall        # remove command, service and config
+yr Oslo
+yr -w
 ```
+
+Uninstall everything:
+
+```bash
+./yr.sh --uninstall
+```
+
+### Requirements
+
+- Bash 4+
+- `curl`, `jq`, `awk`, GNU `date`
+- `libnotify` (`notify-send`) for notifications
+- `zenity` for the config dialog, `rsvg-convert` for PNG icons (both optional)
+
+## Usage
+
+| Command | What it does |
+| --- | --- |
+| `yr Oslo` | forecast for a place |
+| `yr 59.9139 10.7522` | forecast for coordinates |
+| `yr --hours 12 Bergen` | next 12 hours |
+| `yr -w` | active warnings for the configured location |
+| `yr --notify Oslo` | print and desktop-notify warnings |
+| `yr -ar --interval 600 Oslo` | manual warning monitor |
+| `yr -c` | configure location and interval |
+| `yr -i Oslo` / `yr -u` | install / uninstall |
+| `yr --plain Oslo` | no icons or color (scripts) |
+| `yr --help` | all options |
+
+With no place argument, the configured location is used.
 
 ## Configuration
 
@@ -40,37 +85,29 @@ yr Oslo
 yr -c
 ```
 
-Opens a zenity form (falls back to terminal prompts without a display) for the location and poll interval. Config is stored at `~/.config/yr.sh/config`:
+Opens a zenity form (terminal prompts without a display) for:
 
-```text
-# yr.sh configuration
-location=Rjukan
+```ini
+# ~/.config/yr.sh/config
+location=Oslo
 interval=600
 ```
 
-With no place argument, `yr` uses the configured location. Restart the service after changing the config:
+`location` can be a place name or `lat,lon`. Restart the service after editing:
 
 ```bash
 systemctl --user restart yr.service
 ```
 
-## Usage
-
-```bash
-yr Oslo                    # forecast for a place
-yr 59.9139 10.7522         # forecast for coordinates
-yr --hours 12 Bergen       # next 12 hours
-yr --plain Oslo            # no icons or color (scripts)
-yr -w                      # active warnings for the configured location
-yr --notify Oslo           # print and desktop-notify warnings
-yr -ar --interval 600 Oslo # manual warning monitor
-yr --help
-yr --version
-```
-
 ## Warnings service
 
-`--install` runs the warnings monitor as a systemd user service:
+`--install` runs this as a systemd user service:
+
+```bash
+yr --auto-run
+```
+
+Useful commands:
 
 ```bash
 systemctl --user status yr.service
@@ -78,43 +115,32 @@ journalctl --user -u yr.service -f
 systemctl --user restart yr.service
 ```
 
+New warnings trigger a desktop notification with the matching Yr warning icon (type + yellow/orange/red level). Seen alert IDs are tracked in `~/.local/state/yr.sh/`, so each alert notifies once.
+
 Warnings come from MET Norway's MetAlerts and cover Norway only.
 
-## Example output
+## How it works
 
-```text
-  Oslo, Norway · 59.91, 10.75 · updated 21:30
-  ────────────────────────────────────────────────
-  🌡  3.2 °C  (feels like 1.5 °C)
-  💨  1.7 m/s from NE  · gust 2.3 m/s
-  💧  84.6% humidity · 1034.2 hPa
-  🌙  Clear · UV 0.0
+- **Forecast:** [MET Norway Locationforecast 2.0](https://api.met.no/weatherapi/locationforecast/2.0/documentation) (`complete`)
+- **Warnings:** [MET Norway MetAlerts 2.0](https://api.met.no/weatherapi/metalerts/2.0/documentation)
+- **Geocoding:** [Open-Meteo](https://open-meteo.com/en/docs/geocoding-api)
+- **JSON:** parsed with `jq` — no Python in the script
+- **Caching:** responses are reused until the server's `Expires` header; `--no-cache` bypasses
 
-  Today
-  21:00  🌙  Clear                 3.2 °C     0.0 mm     0%
-  22:00  🌙  Clear                 2.9 °C     0.0 mm     0%
-  23:00  🌙  Clear                 2.6 °C     0.0 mm     0%
+## API compliance
 
-  Tomorrow
-  00:00  🌙  Clear                 2.4 °C     0.0 mm     0%
-```
-
-## API compatibility
-
-- Requests identify themselves with a contact URL in the User-Agent (MET requirement).
-- Coordinates are truncated to 4 decimals, as required by MET.
-- Forecast and alert responses are cached until the server's `Expires` header; `--no-cache` forces a refresh.
-- HTTP 203 (deprecated product) prints a warning; 403/429 produce clear errors.
-- Responses are requested with gzip compression.
+- User-Agent identifies the app with the project URL
+- Coordinates are truncated to 4 decimals (MET requirement)
+- gzip compression and local caching; no HEAD + GET
+- HTTP 203 prints a deprecation warning; 403/429 fail with clear messages
 
 Some fields (rain probability, wind gusts) are only published for parts of the world, mainly the Nordic area; elsewhere they show as `–`.
 
-## Data sources and license
+## Data and license
 
-- Forecast and warnings: [MET Norway](https://www.met.no/) via [api.met.no](https://api.met.no/), the API behind yr.no. Data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) and [NLOD](https://data.norge.no/nlod/en/2.0).
-- Warning icons: [Yr warning icons](https://github.com/nrkno/yr-warning-icons) © 2015 Yr/NRK, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), vendored in `assets/warning-icons/` with the license text.
-- Geocoding: [Open-Meteo Geocoding API](https://open-meteo.com/en/docs/geocoding-api).
+- Forecast and warnings: [MET Norway](https://www.met.no/) — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) / [NLOD](https://data.norge.no/nlod/en/2.0)
+- Warning icons: [Yr/NRK warning icons](https://github.com/nrkno/yr-warning-icons) — CC BY 4.0, vendored in `assets/warning-icons/`
+- Geocoding: Open-Meteo
+- Code: MIT — see [LICENSE](LICENSE)
 
-## License
-
-MIT
+Not affiliated with Yr, NRK or MET Norway.

@@ -17,10 +17,11 @@ export LC_NUMERIC=C
 readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/complete"
 readonly ALERTS_URL="https://api.met.no/weatherapi/metalerts/2.0/current.json"
 readonly SUN_URL="https://api.met.no/weatherapi/sunrise/3.0/sun"
+readonly MOON_URL="https://api.met.no/weatherapi/sunrise/3.0/moon"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
 readonly GEOCODE_TZ_URL="https://api.open-meteo.com/v1/forecast"
-readonly USER_AGENT="yr.sh/1.5 (https://github.com/tmiland/yr.sh)"
-readonly VERSION="1.5.0"
+readonly USER_AGENT="yr.sh/1.6 (https://github.com/tmiland/yr.sh)"
+readonly VERSION="1.6.0"
 readonly RULE_LEN=48
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/yr.sh"
 readonly CONFIG_FILE="${CONFIG_DIR}/config"
@@ -539,6 +540,88 @@ format_sun_line() {
     fi
 }
 
+# ---- moon ----------------------------------------------------------------
+# Phase index 0-7: new, waxing crescent, first quarter, waxing gibbous,
+# full, waning gibbous, last quarter, waning crescent.
+moon_phase_index() {
+    awk -v p="$1" 'BEGIN {
+        p = p % 360
+        if (p < 0) p += 360
+        print int((p + 22.5) / 45) % 8
+    }'
+}
+
+moon_phase_emoji() {
+    case $(moon_phase_index "$1") in
+        0) printf '🌑' ;;
+        1) printf '🌒' ;;
+        2) printf '🌓' ;;
+        3) printf '🌔' ;;
+        4) printf '🌕' ;;
+        5) printf '🌖' ;;
+        6) printf '🌗' ;;
+        7) printf '🌘' ;;
+    esac
+}
+
+moon_phase_name() {
+    case $(moon_phase_index "$1") in
+        0) printf 'New moon' ;;
+        1) printf 'Waxing crescent' ;;
+        2) printf 'First quarter' ;;
+        3) printf 'Waxing gibbous' ;;
+        4) printf 'Full moon' ;;
+        5) printf 'Waning gibbous' ;;
+        6) printf 'Last quarter' ;;
+        7) printf 'Waning crescent' ;;
+    esac
+}
+
+moon_illumination() {
+    awk -v p="$1" 'BEGIN {
+        pi = atan2(0, -1)
+        rad = (p % 360) * pi / 180
+        printf "%.0f", (1 - cos(rad)) / 2 * 100
+    }'
+}
+
+format_moon_lines() {
+    local body=$1 phase rise set rise_t set_t
+    phase=$(jq -r '.properties.moonphase // empty' <<<"$body")
+    [[ -n $phase ]] || return 0
+    rise=$(jq -r '.properties.moonrise.time // empty' <<<"$body")
+    set=$(jq -r '.properties.moonset.time // empty' <<<"$body")
+
+    if (( PLAIN )); then
+        printf '%s - %s%% illuminated' \
+            "$(moon_phase_name "$phase")" "$(moon_illumination "$phase")"
+    else
+        printf '%s %s · %s%% illuminated' \
+            "$(moon_phase_emoji "$phase")" "$(moon_phase_name "$phase")" \
+            "$(moon_illumination "$phase")"
+    fi
+
+    if [[ -n $rise || -n $set ]]; then
+        rise_t=${rise:11:5}
+        set_t=${set:11:5}
+        [[ -n $rise_t ]] || rise_t="—"
+        [[ -n $set_t ]] || set_t="—"
+        if (( PLAIN )); then
+            printf '\nMoonrise %s - Moonset %s' "$rise_t" "$set_t"
+        else
+            printf '\n🌙 Moonrise %s · Moonset %s' "$rise_t" "$set_t"
+        fi
+    fi
+}
+
+# Fetch MET moon phase/rise/set for a local date and UTC offset.
+fetch_moon() {
+    local lat=$1 lon=$2 date=$3 offset=$4 offset_key
+    offset_key=${offset//:/}
+    fetch_cached "${MOON_URL}?lat=${lat}&lon=${lon}&date=${date}&offset=$(urlencode "$offset")" \
+        "moon_${CACHE_KEY}_${date}_${offset_key}"
+}
+
 # ---- presentation --------------------------------------------------------
 symbol_base() {
     local code=$1
@@ -655,7 +738,7 @@ day_label() {
 print_forecast() {
     local lat=$1 lon=$2 name=$3 body updated_local lat_disp lon_disp
     local lat_req lon_req sep rule rule_char header_meta
-    local sun_body="" sun_text="" sun_date offset
+    local sun_body="" sun_text="" sun_date offset moon_body="" moon_text="" line
     printf -v lat_req '%.4f' "$lat"
     printf -v lon_req '%.4f' "$lon"
     CACHE_KEY="${lat_req}_${lon_req}"
@@ -668,6 +751,9 @@ print_forecast() {
     sun_date=$(local_date +%F)
     if sun_body=$(fetch_sun "$lat_req" "$lon_req" "$sun_date" "$offset" 2>/dev/null); then
         sun_text=$(format_sun_line "$sun_body")
+    fi
+    if moon_body=$(fetch_moon "$lat_req" "$lon_req" "$sun_date" "$offset" 2>/dev/null); then
+        moon_text=$(format_moon_lines "$moon_body")
     fi
 
     local -a now=()
@@ -761,6 +847,12 @@ print_forecast() {
 
     if [[ -n $sun_text ]]; then
         printf '  %s\n' "$sun_text"
+    fi
+
+    if [[ -n $moon_text ]]; then
+        while IFS= read -r line; do
+            printf '  %s\n' "$line"
+        done <<<"$moon_text"
     fi
 
     local current_day="" row_iso row_symbol row_temp row_precip row_prob
@@ -1074,4 +1166,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+    main "$@"
+fi

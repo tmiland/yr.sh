@@ -23,6 +23,7 @@
 - **Hourly forecast** — weather icons, temperature, precipitation and rain probability
 - **Day separators** — Today / Tomorrow / weekday, in your local time
 - **Sunrise & sunset** — with day length, shown in the location's timezone
+- **Moon phase** — illumination plus moonrise/moonset, location-local
 - **Warnings** — MET MetAlerts for Norway, with the matching Yr warning icon
 - **Desktop notifications** — `notify-send`, one-shot or as a systemd user service
 - **Config-driven** — location and poll interval in `~/.config/yr.sh/config`
@@ -123,7 +124,7 @@ Warnings come from MET Norway's MetAlerts and cover Norway only.
 ## How it works
 
 - **Forecast:** [MET Norway Locationforecast 2.0](https://api.met.no/weatherapi/locationforecast/2.0/documentation) (`complete`)
-- **Sun times:** [MET Norway Sunrise 3.0](https://api.met.no/weatherapi/sunrise/3.0/documentation)
+- **Sun & moon:** [MET Norway Sunrise 3.0](https://api.met.no/weatherapi/sunrise/3.0/documentation) (sun and moon endpoints)
 - **Warnings:** [MET Norway MetAlerts 2.0](https://api.met.no/weatherapi/metalerts/2.0/documentation)
 - **Geocoding:** [Open-Meteo](https://open-meteo.com/en/docs/geocoding-api)
 - **JSON:** parsed with `jq` — no Python in the script
@@ -137,6 +138,14 @@ Warnings come from MET Norway's MetAlerts and cover Norway only.
 - HTTP 203 prints a deprecation warning; 403/429 fail with clear messages
 
 Some fields (rain probability, wind gusts) are only published for parts of the world, mainly the Nordic area; elsewhere they show as `–`.
+
+## Tests
+
+The moon phase helpers have offline tests:
+
+```bash
+bash tests/moon_test.sh
+```
 
 ## Data and license
 

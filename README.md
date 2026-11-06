@@ -2,7 +2,7 @@
 
 # yr.sh
 
-**Yr.no weather in your terminal — a clean forecast dashboard and desktop warnings for Norway.**
+**Yr.no weather in your terminal — a clean forecast dashboard anywhere, with desktop warnings for Norway.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![Bash 4+](https://img.shields.io/badge/bash-4%2B-4EAA25?logo=gnubash&logoColor=white)](#requirements)
@@ -15,7 +15,7 @@
 
 ## Why yr.sh?
 
-`yr.sh` puts the forecast from yr.no (MET Norway) in your terminal: current conditions, an hourly table with weather icons, and active weather warnings with desktop notifications — all in one Bash script. No Python, no browser, no background daemon needed for the forecast.
+`yr.sh` puts the forecast from yr.no (MET Norway) in your terminal — anywhere in the world — with current conditions, an hourly table with weather icons, sunrise/sunset, moon phase, and active weather warnings with desktop notifications. All in one Bash script: no Python, no browser, no background daemon needed for the forecast.
 
 ## Features
 
@@ -29,6 +29,8 @@
 - **Config-driven** — location and poll interval in `~/.config/yr.sh/config`
 - **Terminal-friendly** — color on a TTY, respects `NO_COLOR`, `--plain` for scripts
 - **Well-behaved** — gzip, caching per `Expires`, 4-decimal coordinates, clear HTTP errors
+
+Forecasts, sun/moon times and geocoding work worldwide. Weather warnings use MET's MetAlerts and cover Norway only.
 
 ## Install
 

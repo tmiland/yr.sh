@@ -17,7 +17,7 @@ export LC_NUMERIC=C
 readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/complete"
 readonly ALERTS_URL="https://api.met.no/weatherapi/metalerts/2.0/current.json"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
-readonly USER_AGENT="yr.sh/1.3 (https://github.com/tommy/yr.sh)"
+readonly USER_AGENT="yr.sh/1.3 (https://github.com/tmiland/yr.sh)"
 readonly VERSION="1.3.0"
 readonly RULE_LEN=48
 

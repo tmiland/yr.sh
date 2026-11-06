@@ -16,9 +16,11 @@ export LC_NUMERIC=C
 
 readonly API_BASE="https://api.met.no/weatherapi/locationforecast/2.0/complete"
 readonly ALERTS_URL="https://api.met.no/weatherapi/metalerts/2.0/current.json"
+readonly SUN_URL="https://api.met.no/weatherapi/sunrise/3.0/sun"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
-readonly USER_AGENT="yr.sh/1.4 (https://github.com/tmiland/yr.sh)"
-readonly VERSION="1.4.0"
+readonly GEOCODE_TZ_URL="https://api.open-meteo.com/v1/forecast"
+readonly USER_AGENT="yr.sh/1.5 (https://github.com/tmiland/yr.sh)"
+readonly VERSION="1.5.0"
 readonly RULE_LEN=48
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/yr.sh"
 readonly CONFIG_FILE="${CONFIG_DIR}/config"
@@ -40,6 +42,7 @@ DO_INSTALL=0
 DO_UNINSTALL=0
 CONFIG_LOCATION=""
 CONFIG_INTERVAL=""
+TZ_LOCATION=""
 
 BOLD=""
 DIM=""
@@ -173,6 +176,22 @@ init_color() {
         C_ORANGE=$'\033[38;5;214m'
         C_RED=$'\033[38;5;196m'
     fi
+}
+
+# Run date in the location's timezone when known.
+local_date() {
+    if [[ -n ${TZ_LOCATION:-} ]]; then
+        TZ="$TZ_LOCATION" date "$@"
+    else
+        date "$@"
+    fi
+}
+
+# UTC offset of the location at noon today, as +HH:MM.
+location_offset() {
+    local z
+    z=$(local_date -d "12:00" +%z)
+    printf '%s:%s' "${z:0:3}" "${z:3:2}"
 }
 
 urlencode() {
@@ -463,15 +482,61 @@ auto_run() {
     done
 }
 
-# Print "lat<TAB>lon<TAB>name" for a place name.
+# Print "lat<TAB>lon<TAB>name<TAB>timezone" for a place name.
 geocode() {
-    local query=$1 body lat lon name
+    local query=$1 body lat lon name tz
     body=$(fetch_json "${GEOCODE_URL}?name=$(urlencode "$query")&count=1&language=en")
     lat=$(jq -r '.results[0].latitude // empty' <<<"$body")
     lon=$(jq -r '.results[0].longitude // empty' <<<"$body")
     [[ -n $lat && -n $lon ]] || die "location not found: $query"
     name=$(jq -r '.results[0] | if .country then "\(.name), \(.country)" else .name end' <<<"$body")
-    printf '%s\t%s\t%s\n' "$lat" "$lon" "$name"
+    tz=$(jq -r '.results[0].timezone // empty' <<<"$body")
+    printf '%s\t%s\t%s\t%s\n' "$lat" "$lon" "$name" "$tz"
+}
+
+# Resolve an IANA timezone for coordinates (Open-Meteo, cached).
+resolve_timezone() {
+    local lat=$1 lon=$2 lat_req lon_req body
+    printf -v lat_req '%.4f' "$lat"
+    printf -v lon_req '%.4f' "$lon"
+    body=$(fetch_cached "${GEOCODE_TZ_URL}?latitude=${lat_req}&longitude=${lon_req}&timezone=auto&forecast_days=1" \
+        "tz_${lat_req}_${lon_req}")
+    jq -r '.timezone // empty' <<<"$body"
+}
+
+# Fetch MET sunrise/sunset for a local date and UTC offset.
+fetch_sun() {
+    local lat=$1 lon=$2 date=$3 offset=$4 offset_key
+    offset_key=${offset//:/}
+    fetch_cached "${SUN_URL}?lat=${lat}&lon=${lon}&date=${date}&offset=$(urlencode "$offset")" \
+        "sun_${CACHE_KEY}_${date}_${offset_key}"
+}
+
+# Build the sunrise/sunset line from a Sunrise 3.0 response.
+format_sun_line() {
+    local body=$1 sunrise sunset sr ss sr_epoch ss_epoch mins
+    sunrise=$(jq -r '.properties.sunrise.time // empty' <<<"$body")
+    sunset=$(jq -r '.properties.sunset.time // empty' <<<"$body")
+    if [[ -n $sunrise && -n $sunset ]]; then
+        sr=${sunrise:11:5}
+        ss=${sunset:11:5}
+        sr_epoch=$(date -d "$sunrise" +%s)
+        ss_epoch=$(date -d "$sunset" +%s)
+        mins=$(( (ss_epoch - sr_epoch) / 60 ))
+        if (( PLAIN )); then
+            printf 'Sunrise %s - Sunset %s - %dh %02dm daylight' \
+                "$sr" "$ss" $((mins / 60)) $((mins % 60))
+        else
+            printf '🌅 Sunrise %s · 🌇 Sunset %s · %dh %02dm daylight' \
+                "$sr" "$ss" $((mins / 60)) $((mins % 60))
+        fi
+    else
+        if jq -e '(.properties.solarnoon.disc_centre_elevation // 0) > 0' >/dev/null <<<"$body"; then
+            if (( PLAIN )); then printf 'Midnight sun'; else printf '☀️  Midnight sun'; fi
+        else
+            if (( PLAIN )); then printf 'Polar night'; else printf '🌑 Polar night'; fi
+        fi
+    fi
 }
 
 # ---- presentation --------------------------------------------------------
@@ -576,8 +641,8 @@ wind_compass() {
 
 day_label() {
     local d=$1 today tomorrow
-    today=$(date +%F)
-    tomorrow=$(date -d tomorrow +%F)
+    today=$(local_date +%F)
+    tomorrow=$(local_date -d tomorrow +%F)
     if [[ $d == "$today" ]]; then
         printf 'Today'
     elif [[ $d == "$tomorrow" ]]; then
@@ -590,6 +655,7 @@ day_label() {
 print_forecast() {
     local lat=$1 lon=$2 name=$3 body updated_local lat_disp lon_disp
     local lat_req lon_req sep rule rule_char header_meta
+    local sun_body="" sun_text="" sun_date offset
     printf -v lat_req '%.4f' "$lat"
     printf -v lon_req '%.4f' "$lon"
     CACHE_KEY="${lat_req}_${lon_req}"
@@ -597,6 +663,12 @@ print_forecast() {
 
     jq -e '.properties.timeseries | length > 0' >/dev/null <<<"$body" \
         || die "no forecast data returned"
+
+    offset=$(location_offset)
+    sun_date=$(local_date +%F)
+    if sun_body=$(fetch_sun "$lat_req" "$lon_req" "$sun_date" "$offset" 2>/dev/null); then
+        sun_text=$(format_sun_line "$sun_body")
+    fi
 
     local -a now=()
     mapfile -t now < <(jq -r '
@@ -622,7 +694,7 @@ print_forecast() {
     local wind=${now[4]} gust=${now[5]} dir=${now[6]} humidity=${now[7]}
     local pressure=${now[8]} uv=${now[9]}
 
-    updated_local=$(date -d "$updated" +"%H:%M" 2>/dev/null || printf '%s' "$updated")
+    updated_local=$(local_date -d "$updated" +"%H:%M" 2>/dev/null || printf '%s' "$updated")
     printf -v lat_disp '%.2f' "$lat"
     printf -v lon_disp '%.2f' "$lon"
 
@@ -687,10 +759,14 @@ print_forecast() {
         fi
     fi
 
+    if [[ -n $sun_text ]]; then
+        printf '  %s\n' "$sun_text"
+    fi
+
     local current_day="" row_iso row_symbol row_temp row_precip row_prob
     local row_day row_time row_icon row_label row_col
     while IFS=$'\t' read -r row_iso row_symbol row_temp row_precip row_prob; do
-        read -r row_day row_time <<<"$(date -d "$row_iso" +'%F %H:%M' 2>/dev/null \
+        read -r row_day row_time <<<"$(local_date -d "$row_iso" +'%F %H:%M' 2>/dev/null \
             || printf '%s %s' "${row_iso%%T*}" "${row_iso:11:5}")"
         if [[ $row_day != "$current_day" ]]; then
             current_day=$row_day
@@ -937,7 +1013,7 @@ main() {
     require_deps
     init_color
 
-    local lat="" lon="" name="" place=""
+    local lat="" lon="" name="" place="" tz=""
     if (( ${#args[@]} == 0 )); then
         if [[ -z $CONFIG_LOCATION ]]; then
             usage >&2
@@ -971,9 +1047,19 @@ main() {
     if [[ -n $place ]]; then
         local geo
         geo=$(geocode "$place")
-        IFS=$'\t' read -r lat lon name <<<"$geo"
+        IFS=$'\t' read -r lat lon name tz <<<"$geo"
     fi
     validate_coords "$lat" "$lon"
+
+    if (( !WARN && !NOTIFY && !AUTO_RUN )) && [[ -z $tz ]]; then
+        if ! tz=$(resolve_timezone "$lat" "$lon" 2>/dev/null); then
+            tz=""
+        fi
+    fi
+    if [[ -n $tz ]] && ! TZ="$tz" date +%F >/dev/null 2>&1; then
+        tz=""
+    fi
+    TZ_LOCATION="$tz"
 
     if (( AUTO_RUN )); then
         require_notify

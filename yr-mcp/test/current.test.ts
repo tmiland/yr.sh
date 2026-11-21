@@ -38,6 +38,7 @@ describe("parseCurrentConditions", () => {
   it("extracts the now panel from a real response", () => {
     const c = parseCurrentConditions(BODY);
     expect(c).toEqual({
+      time: "2026-11-21T10:00:00Z",
       updatedAt: "2026-11-21T10:29:04Z",
       symbolCode: "fair_day",
       condition: "Fair",

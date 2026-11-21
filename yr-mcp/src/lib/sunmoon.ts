@@ -45,8 +45,11 @@ export function parseSunMoon(sunBody: unknown, moonBody: unknown): SunMoon {
     daylightMinutes = Math.round((ss - sr) / 60000);
   }
 
-  const polarNight = sunrise === null && sunset === null && (elevation === null || elevation <= 0);
-  const midnightSun = sunrise === null && sunset === null && elevation !== null && elevation > 0;
+  const hasSun = sunProps !== undefined;
+  const polarNight =
+    hasSun && sunrise === null && sunset === null && (elevation === null || elevation <= 0);
+  const midnightSun =
+    hasSun && sunrise === null && sunset === null && elevation !== null && elevation > 0;
 
   const moonProps = (moonBody as { properties?: Record<string, unknown> } | null)?.properties;
   const moonPhaseAngle =

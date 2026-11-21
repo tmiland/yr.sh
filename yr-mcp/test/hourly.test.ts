@@ -23,9 +23,9 @@ const BODY = {
     timeseries: [
       makeEntry("2026-11-21T11:00:00Z", "clearsky_day", -0.4, 0.0, 0.0),
       makeEntry("2026-11-21T12:00:00Z", "clearsky_day", 0.5, 0.0, 0.0),
-      makeEntry("2026-11-21T13:00:00Z", "fair_day", 1.0, 0.0, 0.03),
-      makeEntry("2026-11-21T14:00:00Z", "fair_day", 1.1, 0.0, 0.01),
-      makeEntry("2026-11-21T15:00:00Z", "fair_day", 0.5, 0.0, 0.03),
+      makeEntry("2026-11-21T13:00:00Z", "fair_day", 1.0, 0.0, 3),
+      makeEntry("2026-11-21T14:00:00Z", "fair_day", 1.1, 0.0, 1),
+      makeEntry("2026-11-21T15:00:00Z", "fair_day", 0.5, 0.0, 3),
     ],
   },
 };
@@ -43,6 +43,17 @@ describe("parseHourlyForecast", () => {
       probabilityOfPrecipitation: 0.0,
     });
     expect(rows[2].time).toBe("2026-11-21T13:00:00Z");
+    expect(rows[2].probabilityOfPrecipitation).toBeCloseTo(0.03);
+  });
+
+  it("normalizes MET percent values to a 0-1 fraction", () => {
+    const body = {
+      properties: {
+        timeseries: [makeEntry("2026-11-21T13:00:00Z", "fair_day", 1.0, 0.0, 16.8)],
+      },
+    };
+    const rows = parseHourlyForecast(body, 1);
+    expect(rows[0].probabilityOfPrecipitation).toBeCloseTo(0.168);
   });
 
   it("returns all entries when hours exceeds the series length", () => {

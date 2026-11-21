@@ -150,7 +150,7 @@ Some fields (rain probability, wind gusts) are only published for parts of the w
 - `get_warnings` — active MET Norway weather warnings (Norway only)
 - `get_sun_moon` — sunrise/sunset, daylight length, polar night/midnight sun, moon phase, illumination, moonrise/moonset
 
-Each tool accepts either a place name (`place`) or coordinates (`lat` + `lon`). It speaks stdio, so it runs locally inside an agent:
+Each tool accepts either a place name (`place`) or coordinates (`lat` + `lon`). Responses are wrapped as `{ location, units, data }` so the resolved place, source units and valid time are explicit; `get_sun_moon` adds `date`/`utcOffset` and reports `partial` results if one upstream call fails. The server uses the same 20-second timeout and an `Expires`-aware cache with conditional requests. It speaks stdio, so it runs locally inside an agent:
 
 ```bash
 cd yr-mcp

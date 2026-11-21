@@ -13,6 +13,13 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+// MET publishes probability_of_precipitation in percent; the tool contract is 0-1.
+function fraction(v: unknown): number | null {
+  const n = num(v);
+  if (n === null) return null;
+  return Math.min(1, Math.max(0, n / 100));
+}
+
 export function parseHourlyForecast(body: unknown, hours: number): HourlyEntry[] {
   if (!Number.isInteger(hours) || hours < 1) {
     throw new Error(`hours must be a positive integer: ${hours}`);
@@ -42,7 +49,7 @@ export function parseHourlyForecast(body: unknown, hours: number): HourlyEntry[]
       condition: conditionLabel(symbolCode),
       temperature: num(details.air_temperature) ?? 0,
       precipitation: num(next1Details.precipitation_amount),
-      probabilityOfPrecipitation: num(next1Details.probability_of_precipitation),
+      probabilityOfPrecipitation: fraction(next1Details.probability_of_precipitation),
     });
   }
   return rows;

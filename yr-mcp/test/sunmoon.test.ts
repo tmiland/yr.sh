@@ -72,6 +72,15 @@ describe("parseSunMoon", () => {
     expect(sun.moonset).toBeNull();
   });
 
+  it("handles a missing sun body without claiming polar night", () => {
+    const sun = parseSunMoon(null, MOON_BODY);
+    expect(sun.sunrise).toBeNull();
+    expect(sun.sunset).toBeNull();
+    expect(sun.polarNight).toBe(false);
+    expect(sun.midnightSun).toBe(false);
+    expect(sun.moonPhase).toBe("Waxing gibbous");
+  });
+
   it("handles a missing moonrise/moonset", () => {
     const body = { properties: { moonphase: 45 } };
     const sun = parseSunMoon(SUN_BODY, body);

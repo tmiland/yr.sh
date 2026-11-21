@@ -22,8 +22,10 @@ function riskColor(v: unknown): "yellow" | "orange" | "red" {
 }
 
 export function parseWarnings(body: unknown): Warning[] {
-  const features = (body as { features?: unknown[] })?.features;
-  if (!Array.isArray(features)) return [];
+  const features = (body as { features?: unknown[] } | null)?.features;
+  if (!Array.isArray(features)) {
+    throw new Error("invalid warnings response: missing features array");
+  }
   const warnings: Warning[] = [];
   for (const f of features) {
     const p = (f as { properties?: Record<string, unknown> } | null)?.properties;

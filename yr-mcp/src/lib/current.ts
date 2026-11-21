@@ -1,6 +1,7 @@
 import { conditionLabel } from "./weather.js";
 
 export interface CurrentConditions {
+  time: string;
   updatedAt: string;
   symbolCode: string;
   condition: string;
@@ -52,6 +53,7 @@ export function parseCurrentConditions(body: unknown): CurrentConditions {
   const uv = num(details.ultraviolet_index_clear_sky);
 
   return {
+    time: typeof t.time === "string" ? t.time : "",
     updatedAt: typeof meta.updated_at === "string" ? meta.updated_at : "unknown",
     symbolCode,
     condition: conditionLabel(symbolCode),

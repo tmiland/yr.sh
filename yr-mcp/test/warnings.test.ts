@@ -47,8 +47,9 @@ describe("parseWarnings", () => {
     expect(parseWarnings({ type: "FeatureCollection", features: [] })).toEqual([]);
   });
 
-  it("returns an empty array when features are missing", () => {
-    expect(parseWarnings({ type: "FeatureCollection" })).toEqual([]);
+  it("throws when features are missing instead of reporting a false all-clear", () => {
+    expect(() => parseWarnings({ type: "FeatureCollection" })).toThrow(/invalid warnings/i);
+    expect(() => parseWarnings(null)).toThrow(/invalid warnings/i);
   });
 
   it("falls back to the event name when title is missing", () => {

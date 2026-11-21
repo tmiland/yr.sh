@@ -141,6 +141,39 @@ Warnings come from MET Norway's MetAlerts and cover Norway only.
 
 Some fields (rain probability, wind gusts) are only published for parts of the world, mainly the Nordic area; elsewhere they show as `–`.
 
+## MCP server
+
+`yr-mcp/` is a sibling [Model Context Protocol](https://modelcontextprotocol.io/) server that exposes the same MET Norway data as typed tools for AI agents:
+
+- `get_current_conditions` — temperature, feels-like, wind, humidity, pressure, UV, condition
+- `get_hourly_forecast` — hourly entries (time, condition, temperature, precipitation, probability as a 0–1 fraction)
+- `get_warnings` — active MET Norway weather warnings (Norway only)
+- `get_sun_moon` — sunrise/sunset, daylight length, polar night/midnight sun, moon phase, illumination, moonrise/moonset
+
+Each tool accepts either a place name (`place`) or coordinates (`lat` + `lon`). It speaks stdio, so it runs locally inside an agent:
+
+```bash
+cd yr-mcp
+npm install
+npm run build
+npm start          # or: node dist/index.js
+```
+
+Agent config (example, stdio):
+
+```json
+{
+  "mcpServers": {
+    "yr": {
+      "command": "node",
+      "args": ["/path/to/yr.sh/yr-mcp/dist/index.js"]
+    }
+  }
+}
+```
+
+Tests: `npm test` (vitest, offline — HTTP is stubbed).
+
 ## Tests
 
 The moon phase helpers have offline tests:

@@ -13,3 +13,7 @@ Thumbs.db
 
 # Internal notes (never publish)
 docs/superpowers/
+
+# Node (yr-mcp)
+node_modules/
+dist/

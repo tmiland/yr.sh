@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
-#
-# yr.sh — weather forecast from yr.no (MET Norway) in your terminal.
-#
+
+## Author: Tommy Miland (@tmiland) - Copyright (c) 2026
+
+######################################################################
+####                            yr.sh                             ####
+####               Yr.no weather in your terminal:                ####
+####       forecast dashboard and desktop weather warnings        ####
+####                    Maintained by @tmiland                    ####
+######################################################################
+
 # Usage:
-#   ./yr.sh [OPTIONS] <place>
-#   ./yr.sh [OPTIONS] <lat> <lon>
+#   yr [OPTIONS] <place>
+#   yr [OPTIONS] <lat> <lon>
 #
 # Examples:
-#   ./yr.sh Oslo
-#   ./yr.sh 59.9139 10.7522
-#   ./yr.sh --hours 12 Bergen
+#   yr Oslo
+#   yr 59.9139 10.7522
+#   yr --hours 12 Bergen
+#
+# MIT License — see LICENSE in this repo.
 
 set -euo pipefail
 export LC_NUMERIC=C
@@ -20,8 +29,8 @@ readonly SUN_URL="https://api.met.no/weatherapi/sunrise/3.0/sun"
 readonly MOON_URL="https://api.met.no/weatherapi/sunrise/3.0/moon"
 readonly GEOCODE_URL="https://geocoding-api.open-meteo.com/v1/search"
 readonly GEOCODE_TZ_URL="https://api.open-meteo.com/v1/forecast"
-readonly USER_AGENT="yr.sh/1.6 (https://github.com/tmiland/yr.sh)"
-readonly VERSION="1.6.0"
+readonly USER_AGENT="yr.sh/1.0 (https://github.com/tmiland/yr.sh)"
+readonly VERSION="1.0.0"
 readonly RULE_LEN=48
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/yr.sh"
 readonly CONFIG_FILE="${CONFIG_DIR}/config"

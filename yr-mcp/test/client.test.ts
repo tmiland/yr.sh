@@ -127,7 +127,7 @@ describe("WeatherClient", () => {
     const { data: rows, units } = await client.hourlyForecast(59.88, 8.59, 6);
     expect(rows).toHaveLength(1);
     expect(rows[0].time).toBe("2026-11-21T10:00:00Z");
-    expect(units.probability_of_precipitation).toBe("%");
+    expect(units.probability_of_precipitation).toBe("fraction");
   });
 
   it("fetches warnings from the MET alerts endpoint", async () => {

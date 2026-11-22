@@ -41,7 +41,7 @@ function stubClient(overrides: Record<string, unknown> = {}): WeatherClient {
           probabilityOfPrecipitation: 0.0,
         },
       ],
-      units: { probability_of_precipitation: "%" },
+      units: { probability_of_precipitation: "fraction" },
     })),
     warnings: vi.fn(async () => []),
     sunMoon: vi.fn(async () => ({
@@ -117,7 +117,7 @@ describe("createServer", () => {
     expect(result.isError).toBeFalsy();
     const payload = textPayload(result);
     expect((payload.data as unknown[]).length).toBe(1);
-    expect(payload.units).toEqual({ probability_of_precipitation: "%" });
+    expect(payload.units).toEqual({ probability_of_precipitation: "fraction" });
     expect(stub.hourlyForecast).toHaveBeenCalledWith(59.88, 8.59, 2);
   });
 

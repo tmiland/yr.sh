@@ -44,7 +44,7 @@ function stubClient(overrides: Record<string, unknown> = {}): WeatherClient {
           probabilityOfPrecipitation: 0.0,
         },
       ],
-      units: { precipitation_amount: "mm", probability_of_precipitation: "%" },
+      units: { precipitation_amount: "mm", probability_of_precipitation: "fraction" },
     })),
     warnings: vi.fn(async () => [
       {
@@ -127,7 +127,7 @@ describe("getHourlyForecast", () => {
     expect(client.hourlyForecast).toHaveBeenCalledWith(59.88, 8.59, 6);
     expect(client.resolveTimezone).not.toHaveBeenCalled();
     expect(result.data).toHaveLength(1);
-    expect(result.units.probability_of_precipitation).toBe("%");
+    expect(result.units.probability_of_precipitation).toBe("fraction");
   });
 
   it("passes the requested hours through", async () => {

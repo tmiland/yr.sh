@@ -2,7 +2,7 @@ import { parseCurrentConditions, type CurrentConditions } from "./lib/current.js
 import { parseGeocodeResponse, type GeocodedPlace } from "./lib/geocode.js";
 import { parseHourlyForecast, type HourlyEntry } from "./lib/hourly.js";
 import { parseSunMoon, type SunMoon } from "./lib/sunmoon.js";
-import { responseUnits, type Units } from "./lib/units.js";
+import { hourlyUnits, responseUnits, type Units } from "./lib/units.js";
 import { parseWarnings, type Warning } from "./lib/warnings.js";
 
 const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
@@ -204,7 +204,7 @@ export class WeatherClient {
   ): Promise<ForecastResult<HourlyEntry[]>> {
     const url = `${FORECAST_URL}?lat=${fmt(lat)}&lon=${fmt(lon)}`;
     const body = await this.getJson(url);
-    return { data: parseHourlyForecast(body, hours), units: responseUnits(body) };
+    return { data: parseHourlyForecast(body, hours), units: hourlyUnits(body) };
   }
 
   async resolveTimezone(lat: number, lon: number): Promise<string> {

@@ -13,3 +13,13 @@ export function responseUnits(body: unknown): Units {
   }
   return out;
 }
+
+// The hourly parser converts MET's percent probability to a 0-1 fraction, so
+// the advertised unit must say so — otherwise "%" contradicts the values.
+export function hourlyUnits(body: unknown): Units {
+  const units = responseUnits(body);
+  if ("probability_of_precipitation" in units) {
+    units.probability_of_precipitation = "fraction";
+  }
+  return units;
+}

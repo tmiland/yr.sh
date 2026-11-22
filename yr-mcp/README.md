@@ -28,7 +28,7 @@ Every tool returns an envelope so an agent can verify what it got and in which u
   "units": {
     "air_temperature": "celsius",
     "wind_speed": "m/s",
-    "probability_of_precipitation": "%"
+    "probability_of_precipitation": "fraction"
   },
   "data": {
     "time": "2026-11-21T10:00:00Z",
@@ -39,7 +39,7 @@ Every tool returns an envelope so an agent can verify what it got and in which u
 ```
 
 - `units` is MET's own `meta.units` map and is omitted where the source has none (`get_warnings`).
-- `data.probabilityOfPrecipitation` is a **0–1 fraction**, converted from MET's percent value.
+- `data.probabilityOfPrecipitation` is a **0–1 fraction**, converted from MET's percent value; `units.probability_of_precipitation` is relabelled to `fraction` accordingly.
 - `get_current_conditions` includes `data.time`, the valid time of the observation/model step; `data.updatedAt` is the model run time.
 - `get_sun_moon` adds `date` and `utcOffset`. If one of the two upstream calls fails it returns the available half with `"partial": true` and an `errors` array; if timezone lookup fails it uses UTC and sets `"timezoneFallback": true`.
 - `place` and `lat`/`lon` are alternative inputs; `place` takes precedence if both are supplied.
